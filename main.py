@@ -2,58 +2,66 @@ import discord
 import pandas as pd
 import io
 import os
-import json
+import re
+from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
-# =========================
-# 環境変数
-# =========================
+# =============================
+# Discord設定
+# =============================
 TOKEN = os.getenv("DISCORD_TOKEN")
-SPREADSHEET_NAME = "妖精CSマンスリーランキング"
-GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
 
-if TOKEN is None:
-    raise ValueError("DISCORD_TOKEN is not set!")
-
-if GOOGLE_CREDENTIALS is None:
-    raise ValueError("GOOGLE_CREDENTIALS is not set!")
-
-# =========================
-# Google Sheet 接続
-# =========================
-def get_sheet():
-    creds_json = json.loads(GOOGLE_CREDENTIALS)
-
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-
-    creds = Credentials.from_service_account_info(creds_json, scopes=scope)
-    gc = gspread.authorize(creds)
-
-    spreadsheet = gc.open(SPREADSHEET_NAME)
-    sheet = spreadsheet.sheet1
-    return sheet
-
-
-# =========================
-# Discord Bot 設定
-# =========================
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
+# =============================
+# Google Sheets設定
+# =============================
+SPREADSHEET_NAME = "妖精CSマンスリーランキング"
 
-@client.event
-async def on_ready():
-    print(f"Logged in as {client.user}")
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
+def get_sheet():
+    creds_dict = eval(os.getenv("GOOGLE_CREDENTIALS"))
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    gc = gspread.authorize(creds)
+    return gc.open(SPREADSHEET_NAME)
 
+# =============================
+# 基礎ポイント計算
+# =============================
+def get_base_point(rank):
+    try:
+        rank = int(rank)
+    except:
+        return 3  # ドロップ扱い
+
+    if rank == 1:
+        return 20
+    elif rank == 2:
+        return 15
+    elif 3 <= rank <= 4:
+        return 10
+    elif 5 <= rank <= 8:
+        return 7
+    elif 9 <= rank <= 16:
+        return 5
+    elif 17 <= rank <= 32:
+        return 4
+    else:
+        return 3
+
+# =============================
+# CSV処理
+# =============================
 @client.event
 async def on_message(message):
-    if message.author == client.user:
+    if message.author.bot:
         return
 
     if message.attachments:
@@ -64,52 +72,111 @@ async def on_message(message):
 
             file_bytes = await attachment.read()
 
-            # =========================
-            # CSV読み込み（文字コード自動対応）
-            # =========================
             try:
                 df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
-            except UnicodeDecodeError:
-                df = pd.read_csv(io.BytesIO(file_bytes), encoding="cp932")
+            except:
+                df = pd.read_csv(io.BytesIO(file_bytes), encoding="shift-jis")
 
-            # =========================
-            # 必要列チェック
-            # =========================
-            required_columns = ["識別番号", "プレイヤー名", "スコア"]
+            # 必須列チェック
+            required_columns = ["順位", "識別番号", "氏名"]
             for col in required_columns:
                 if col not in df.columns:
                     await message.channel.send(f"エラー：'{col}' 列が見つかりません。")
                     return
 
-            # =========================
-            # 識別番号で自動合算
-            # =========================
+            # =============================
+            # 日付抽出
+            # =============================
+            match = re.search(r"\((\d{8})\)", attachment.filename)
+            if not match:
+                await message.channel.send("ファイル名から日付を取得できませんでした。")
+                return
+
+            date_str = match.group(1)
+            event_date = datetime.strptime(date_str, "%Y%m%d")
+            month_str = event_date.strftime("%Y-%m")
+            date_display = event_date.strftime("%Y-%m-%d")
+
+            # =============================
+            # 参加人数
+            # =============================
+            participant_count = len(df)
+
+            # =============================
+            # ポイント計算
+            # =============================
+            def calc_point(row):
+                rank = row["順位"]
+                base = get_base_point(rank)
+                return base * participant_count
+
+            df["獲得pt"] = df.apply(calc_point, axis=1)
+            df["開催日"] = date_display
+            df["月"] = month_str
+            df["参加人数"] = participant_count
+
+            # =============================
+            # Google Sheets書き込み
+            # =============================
+            spreadsheet = get_sheet()
+
+            # 大会ログシート取得 or 作成
+            try:
+                log_sheet = spreadsheet.worksheet("大会ログ")
+            except:
+                log_sheet = spreadsheet.add_worksheet(title="大会ログ", rows=1000, cols=10)
+                log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
+
+            # 追記
+            for _, row in df.iterrows():
+                log_sheet.append_row([
+                    row["開催日"],
+                    row["月"],
+                    row["識別番号"],
+                    row["氏名"],
+                    row["順位"],
+                    row["参加人数"],
+                    row["獲得pt"]
+                ])
+
+            # =============================
+            # 月別集計
+            # =============================
+            records = log_sheet.get_all_records()
+            log_df = pd.DataFrame(records)
+
+            month_df = log_df[log_df["月"] == month_str]
+
             grouped = (
-                df.groupby("識別番号")
+                month_df.groupby("識別番号")
                 .agg({
-                    "プレイヤー名": "first",
-                    "スコア": "sum"
+                    "氏名": "first",
+                    "獲得pt": "sum"
                 })
                 .reset_index()
             )
 
-            # =========================
-            # ランキング作成
-            # =========================
-            grouped = grouped.sort_values(by="スコア", ascending=False)
+            grouped = grouped.sort_values(by="獲得pt", ascending=False)
             grouped["順位"] = range(1, len(grouped) + 1)
 
-            # =========================
-            # Google Sheetへ保存
-            # =========================
-            sheet = get_sheet()
-            sheet.clear()
-            sheet.update([grouped.columns.values.tolist()] + grouped.values.tolist())
+            # 月シート取得 or 作成
+            try:
+                month_sheet = spreadsheet.worksheet(month_str)
+                month_sheet.clear()
+            except:
+                month_sheet = spreadsheet.add_worksheet(title=month_str, rows=1000, cols=10)
 
-            await message.channel.send("✅ 集計完了！スプレッドシートに保存しました。")
+            # 書き込み
+            month_sheet.append_row(["順位","識別番号","氏名","合計pt"])
 
+            for _, row in grouped.iterrows():
+                month_sheet.append_row([
+                    row["順位"],
+                    row["識別番号"],
+                    row["氏名"],
+                    row["獲得pt"]
+                ])
 
-# =========================
-# Bot起動
-# =========================
+            await message.channel.send(f"{month_str} のランキングを更新しました！")
+
 client.run(TOKEN)
