@@ -87,7 +87,7 @@ async def on_message(message):
             # =============================
             # 日付抽出
             # =============================
-            match = re.search(r"\((\d{8})\)", attachment.filename)
+            match = re.search(r"[（(](\d{8})[）)]", attachment.filename)
             if not match:
                 await message.channel.send("ファイル名から日付を取得できませんでした。")
                 return
