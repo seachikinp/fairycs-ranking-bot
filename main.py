@@ -80,6 +80,7 @@ async def on_message(message):
         attachment = message.attachments[0]
 
         if attachment.filename.endswith(".csv"):
+            await message.channel.send(f"受信ファイル名: {attachment.filename}")
             await message.channel.send("CSVを受け取りました。集計します...")
 
             file_bytes = await attachment.read()
