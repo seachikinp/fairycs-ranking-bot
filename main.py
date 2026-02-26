@@ -167,7 +167,38 @@ async def on_message(message):
     data = grouped[["順位","識別番号","氏名","獲得pt"]].values.tolist()
 
     month_sheet.update("A1", header + data)
+    
+    # =========================
+    # 上位15位をEmbed表示
+    # =========================
+    top15 = grouped.head(15)
 
+    embed = discord.Embed(
+        title=f"🏆 {month_str} ランキング TOP15",
+        color=0xFFD700
+    )
+
+    description_lines = []
+
+    for _, row in top15.iterrows():
+        rank = row["順位"]
+        name = row["氏名"]
+        pt = row["獲得pt"]
+
+        if rank == 1:
+            line = f"🥇 **1位** {name} - {pt}pt"
+        elif rank == 2:
+            line = f"🥈 **2位** {name} - {pt}pt"
+        elif rank == 3:
+            line = f"🥉 **3位** {name} - {pt}pt"
+        else:
+            line = f"{rank}位 {name} - {pt}pt"
+
+        description_lines.append(line)
+
+    embed.description = "\n".join(description_lines)
+
+    await message.channel.send(embed=embed)
     await message.channel.send(f"{month_str} のランキングを更新しました！")
 
 # =========================
