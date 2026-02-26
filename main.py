@@ -80,11 +80,14 @@ async def on_message(message):
         attachment = message.attachments[0]
 
         if attachment.filename.endswith(".csv"):
+
+            # デバッグ用：受信ファイル名表示
             await message.channel.send(f"受信ファイル名: {attachment.filename}")
             await message.channel.send("CSVを受け取りました。集計します...")
 
             file_bytes = await attachment.read()
 
+            # CSV読み込み
             try:
                 df = read_csv_safely(file_bytes)
             except Exception as e:
@@ -104,11 +107,17 @@ async def on_message(message):
             match = re.search(r"\d{8}", attachment.filename)
 
             if not match:
-                await message.channel.send(f"日付取得失敗: ファイル名 = {attachment.filename}")
+                await message.channel.send(f"日付取得失敗: {attachment.filename}")
                 return
 
             date_str = match.group(0)
-            event_date = datetime.strptime(date_str, "%Y%m%d")
+
+            try:
+                event_date = datetime.strptime(date_str, "%Y%m%d")
+            except ValueError:
+                await message.channel.send(f"日付形式が不正です: {date_str}")
+                return
+
             month_str = event_date.strftime("%Y-%m")
             date_display = event_date.strftime("%Y-%m-%d")
 
