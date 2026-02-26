@@ -57,6 +57,18 @@ def get_base_point(rank):
         return 3
 
 # =============================
+# CSV読み込み（UTF-8 / SJIS両対応）
+# =============================
+def read_csv_safely(file_bytes):
+    encodings = ["utf-8-sig", "utf-8", "cp932", "shift-jis"]
+    for enc in encodings:
+        try:
+            return pd.read_csv(io.BytesIO(file_bytes), encoding=enc)
+        except:
+            continue
+    raise Exception("CSVの文字コードを判定できませんでした。UTF-8またはSJISで保存してください。")
+
+# =============================
 # CSV処理
 # =============================
 @client.event
@@ -72,17 +84,12 @@ async def on_message(message):
 
             file_bytes = await attachment.read()
 
-            # =============================
-            # CSV読み込み（完全対応版）
-            # =============================
             try:
-                df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
-            except:
-            try:
-                df = pd.read_csv(io.BytesIO(file_bytes), encoding="cp932")
-            except:
-                df = pd.read_csv(io.BytesIO(file_bytes), encoding="shift-jis", errors="replace")
- 
+                df = read_csv_safely(file_bytes)
+            except Exception as e:
+                await message.channel.send(str(e))
+                return
+
             # 必須列チェック
             required_columns = ["順位", "識別番号", "氏名"]
             for col in required_columns:
@@ -90,9 +97,7 @@ async def on_message(message):
                     await message.channel.send(f"エラー：'{col}' 列が見つかりません。")
                     return
 
-            # =============================
-            # 日付抽出
-            # =============================
+            # 日付抽出（全角半角対応）
             match = re.search(r"[（(](\d{8})[）)]", attachment.filename)
             if not match:
                 await message.channel.send("ファイル名から日付を取得できませんでした。")
@@ -103,14 +108,8 @@ async def on_message(message):
             month_str = event_date.strftime("%Y-%m")
             date_display = event_date.strftime("%Y-%m-%d")
 
-            # =============================
-            # 参加人数
-            # =============================
             participant_count = len(df)
 
-            # =============================
-            # ポイント計算
-            # =============================
             def calc_point(row):
                 rank = row["順位"]
                 base = get_base_point(rank)
@@ -121,19 +120,15 @@ async def on_message(message):
             df["月"] = month_str
             df["参加人数"] = participant_count
 
-            # =============================
-            # Google Sheets書き込み
-            # =============================
             spreadsheet = get_sheet()
 
-            # 大会ログシート取得 or 作成
+            # 大会ログ
             try:
                 log_sheet = spreadsheet.worksheet("大会ログ")
             except:
                 log_sheet = spreadsheet.add_worksheet(title="大会ログ", rows=1000, cols=10)
                 log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
 
-            # 追記
             for _, row in df.iterrows():
                 log_sheet.append_row([
                     row["開催日"],
@@ -145,12 +140,9 @@ async def on_message(message):
                     row["獲得pt"]
                 ])
 
-            # =============================
             # 月別集計
-            # =============================
             records = log_sheet.get_all_records()
             log_df = pd.DataFrame(records)
-
             month_df = log_df[log_df["月"] == month_str]
 
             grouped = (
@@ -165,14 +157,12 @@ async def on_message(message):
             grouped = grouped.sort_values(by="獲得pt", ascending=False)
             grouped["順位"] = range(1, len(grouped) + 1)
 
-            # 月シート取得 or 作成
             try:
                 month_sheet = spreadsheet.worksheet(month_str)
                 month_sheet.clear()
             except:
                 month_sheet = spreadsheet.add_worksheet(title=month_str, rows=1000, cols=10)
 
-            # 書き込み
             month_sheet.append_row(["順位","識別番号","氏名","合計pt"])
 
             for _, row in grouped.iterrows():
