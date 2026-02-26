@@ -2,26 +2,18 @@ import discord
 import pandas as pd
 import io
 import os
-import json
 from datetime import datetime
+import gspread
+from google.oauth2.service_account import Credentials
 
 TOKEN = os.getenv("TOKEN")
+
+SPREADSHEET_NAME = "妖精CSマンスリーランキング"
+SHEET_NAME = "monthly"
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
-
-DATA_FILE = "monthly_data.json"
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def get_base_point(rank):
     if rank == 1:
@@ -38,6 +30,13 @@ def get_base_point(rank):
         return 4
     else:
         return 3
+
+def get_sheet():
+    creds_dict = eval(os.getenv("GOOGLE_CREDENTIALS"))
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    gc = gspread.authorize(credentials)
+    return gc.open(SPREADSHEET_NAME).worksheet(SHEET_NAME)
 
 @bot.event
 async def on_message(message):
@@ -58,36 +57,56 @@ async def on_message(message):
                 df["獲得ポイント"] = df["基礎ポイント"] * participants
 
                 monthly_key = datetime.now().strftime("%Y-%m")
-                data = load_data()
 
-                if monthly_key not in data:
-                    data[monthly_key] = {}
+                sheet = get_sheet()
+                records = sheet.get_all_records()
+                existing_df = pd.DataFrame(records)
 
+                # 今月データのみ抽出
+                if not existing_df.empty:
+                    existing_df = existing_df[existing_df["month"] == monthly_key]
+                else:
+                    existing_df = pd.DataFrame(columns=["month", "id", "name", "points"])
+
+                # 新規データ整形
+                new_data = []
                 for _, row in df.iterrows():
-                    player_id = str(row["識別番号"])
-                    name = row["氏名"]
-                    points = int(row["獲得ポイント"])
+                    new_data.append({
+                        "month": monthly_key,
+                        "id": str(row["識別番号"]),
+                        "name": row["氏名"],
+                        "points": int(row["獲得ポイント"])
+                    })
 
-                    if player_id not in data[monthly_key]:
-                        data[monthly_key][player_id] = {
-                            "name": name,
-                            "points": 0
-                        }
+                new_df = pd.DataFrame(new_data)
 
-                    data[monthly_key][player_id]["name"] = name
-                    data[monthly_key][player_id]["points"] += points
+                combined = pd.concat([existing_df, new_df])
 
-                save_data(data)
+                # 識別番号で合算
+                grouped = combined.groupby(["month", "id"]).agg({
+                    "name": "last",
+                    "points": "sum"
+                }).reset_index()
 
-                ranking = sorted(
-                    data[monthly_key].values(),
-                    key=lambda x: x["points"],
-                    reverse=True
+                # シート全消去→再書き込み
+                sheet.clear()
+                sheet.append_row(["month", "id", "name", "points"])
+                for _, row in grouped.iterrows():
+                    sheet.append_row([
+                        row["month"],
+                        row["id"],
+                        row["name"],
+                        row["points"]
+                    ])
+
+                # ランキング作成（全員）
+                ranking = grouped.sort_values(
+                    by="points", ascending=False
                 )
 
                 result = f"🏆 {monthly_key} マンスリーランキング\n\n"
-                for i, player in enumerate(ranking[:10], 1):
-                    result += f"{i}位 {player['name']} - {player['points']}pt\n"
+                for i, row in enumerate(ranking.itertuples(), 1):
+                    result += f"{i}位 {row.name} - {row.points}pt\n"
 
                 await message.channel.send(result)
 
