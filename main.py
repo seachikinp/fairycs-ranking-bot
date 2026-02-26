@@ -69,145 +69,161 @@ def read_csv_safely(file_bytes):
     raise Exception("CSVの文字コードを判定できませんでした。UTF-8またはSJISで保存してください。")
 
 # =============================
-# NaN安全変換
+# NaN安全変換（JSON完全対応）
 # =============================
 def safe_value(v):
     if pd.isna(v):
         return ""
+    if isinstance(v, float):
+        if pd.isna(v):
+            return ""
+        if v == float("inf") or v == float("-inf"):
+            return ""
     return v
 
 # =============================
-# CSV処理
+# メイン処理
 # =============================
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    if message.attachments:
-        attachment = message.attachments[0]
+    if not message.attachments:
+        return
 
-        if attachment.filename.endswith(".csv"):
+    attachment = message.attachments[0]
 
-            await message.channel.send(f"受信ファイル名: {attachment.filename}")
-            await message.channel.send("CSVを受け取りました。集計します...")
+    if not attachment.filename.endswith(".csv"):
+        return
 
-            file_bytes = await attachment.read()
+    await message.channel.send(f"受信ファイル名: {attachment.filename}")
+    await message.channel.send("CSVを受け取りました。集計します...")
 
-            # CSV読み込み
-            try:
-                df = read_csv_safely(file_bytes)
-            except Exception as e:
-                await message.channel.send(str(e))
-                return
+    file_bytes = await attachment.read()
 
-            # NaN完全除去
-            df = df.fillna("")
+    # CSV読み込み
+    try:
+        df = read_csv_safely(file_bytes)
+    except Exception as e:
+        await message.channel.send(str(e))
+        return
 
-            # 必須列チェック
-            required_columns = ["順位", "識別番号", "氏名"]
-            for col in required_columns:
-                if col not in df.columns:
-                    await message.channel.send(f"エラー：'{col}' 列が見つかりません。")
-                    return
+    # NaN完全除去
+    df = df.fillna("")
 
-            # =============================
-            # 日付抽出（8桁数字）
-            # =============================
-            match = re.search(r"\d{8}", attachment.filename)
+    # 必須列チェック
+    required_columns = ["順位", "識別番号", "氏名"]
+    for col in required_columns:
+        if col not in df.columns:
+            await message.channel.send(f"エラー：'{col}' 列が見つかりません。")
+            return
 
-            if not match:
-                await message.channel.send(f"日付取得失敗: {attachment.filename}")
-                return
+    # =============================
+    # 日付抽出（ファイル名の8桁数字）
+    # =============================
+    match = re.search(r"\d{8}", attachment.filename)
+    if not match:
+        await message.channel.send("ファイル名から日付を取得できませんでした。")
+        return
 
-            date_str = match.group(0)
+    date_str = match.group(0)
 
-            try:
-                event_date = datetime.strptime(date_str, "%Y%m%d")
-            except ValueError:
-                await message.channel.send(f"日付形式が不正です: {date_str}")
-                return
+    try:
+        event_date = datetime.strptime(date_str, "%Y%m%d")
+    except ValueError:
+        await message.channel.send("日付形式が不正です。")
+        return
 
-            month_str = event_date.strftime("%Y-%m")
-            date_display = event_date.strftime("%Y-%m-%d")
+    month_str = event_date.strftime("%Y-%m")
+    date_display = event_date.strftime("%Y-%m-%d")
 
-            participant_count = len(df)
+    participant_count = len(df)
 
-            # ポイント計算
-            def calc_point(row):
-                base = get_base_point(row["順位"])
-                return base * participant_count
+    # ポイント計算
+    def calc_point(row):
+        base = get_base_point(row["順位"])
+        return base * participant_count
 
-            df["獲得pt"] = df.apply(calc_point, axis=1)
-            df["開催日"] = date_display
-            df["月"] = month_str
-            df["参加人数"] = participant_count
+    df["獲得pt"] = df.apply(calc_point, axis=1)
+    df["開催日"] = date_display
+    df["月"] = month_str
+    df["参加人数"] = participant_count
 
-            spreadsheet = get_sheet()
+    spreadsheet = get_sheet()
 
-            # 大会ログ取得 or 作成
-            try:
-                log_sheet = spreadsheet.worksheet("大会ログ")
-            except:
-                log_sheet = spreadsheet.add_worksheet(title="大会ログ", rows=1000, cols=10)
-                log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
+    # =============================
+    # 大会ログシート（自動修復対応）
+    # =============================
+    try:
+        log_sheet = spreadsheet.worksheet("大会ログ")
+        headers = log_sheet.row_values(1)
 
-            # ログ追記（NaN完全対策）
-            for _, row in df.iterrows():
-                values = [
-                    safe_value(row["開催日"]),
-                    safe_value(row["月"]),
-                    safe_value(row["識別番号"]),
-                    safe_value(row["氏名"]),
-                    safe_value(row["順位"]),
-                    safe_value(row["参加人数"]),
-                    safe_value(row["獲得pt"])
-                ]
-                log_sheet.append_row(values)
+        expected_headers = ["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"]
 
-            # =============================
-            # 月別集計
-            # =============================
-            records = log_sheet.get_all_records()
-            log_df = pd.DataFrame(records)
-            log_df = log_df.fillna("")
+        if headers != expected_headers:
+            log_sheet.clear()
+            log_sheet.append_row(expected_headers)
 
-            month_df = log_df[log_df["月"] == month_str]
+    except:
+        log_sheet = spreadsheet.add_worksheet(title="大会ログ", rows=1000, cols=10)
+        log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
 
-            if len(month_df) == 0:
-                await message.channel.send("対象データがありません。")
-                return
+    # ログ追記（NaN完全排除）
+    for _, row in df.iterrows():
+        values = [
+            safe_value(row["開催日"]),
+            safe_value(row["月"]),
+            safe_value(row["識別番号"]),
+            safe_value(row["氏名"]),
+            safe_value(row["順位"]),
+            safe_value(row["参加人数"]),
+            safe_value(row["獲得pt"])
+        ]
+        log_sheet.append_row(values)
 
-            grouped = (
-                month_df.groupby("識別番号")
-                .agg({
-                    "氏名": "first",
-                    "獲得pt": "sum"
-                })
-                .reset_index()
-            )
+    # =============================
+    # 月別集計
+    # =============================
+    records = log_sheet.get_all_records()
+    log_df = pd.DataFrame(records)
 
-            grouped = grouped.sort_values(by="獲得pt", ascending=False)
-            grouped["順位"] = range(1, len(grouped) + 1)
+    if "月" not in log_df.columns:
+        await message.channel.send("大会ログの列構造に問題があります。")
+        return
 
-            # 月シート取得 or 作成
-            try:
-                month_sheet = spreadsheet.worksheet(month_str)
-                month_sheet.clear()
-            except:
-                month_sheet = spreadsheet.add_worksheet(title=month_str, rows=1000, cols=10)
+    month_df = log_df[log_df["月"] == month_str]
 
-            month_sheet.append_row(["順位","識別番号","氏名","合計pt"])
+    grouped = (
+        month_df.groupby("識別番号")
+        .agg({
+            "氏名": "first",
+            "獲得pt": "sum"
+        })
+        .reset_index()
+    )
 
-            for _, row in grouped.iterrows():
-                values = [
-                    safe_value(row["順位"]),
-                    safe_value(row["識別番号"]),
-                    safe_value(row["氏名"]),
-                    safe_value(row["獲得pt"])
-                ]
-                month_sheet.append_row(values)
+    grouped = grouped.sort_values(by="獲得pt", ascending=False)
+    grouped["順位"] = range(1, len(grouped) + 1)
 
-            await message.channel.send(f"{month_str} のランキングを更新しました！")
+    # 月シート取得 or 作成
+    try:
+        month_sheet = spreadsheet.worksheet(month_str)
+        month_sheet.clear()
+    except:
+        month_sheet = spreadsheet.add_worksheet(title=month_str, rows=1000, cols=10)
+
+    month_sheet.append_row(["順位","識別番号","氏名","合計pt"])
+
+    for _, row in grouped.iterrows():
+        values = [
+            safe_value(row["順位"]),
+            safe_value(row["識別番号"]),
+            safe_value(row["氏名"]),
+            safe_value(row["獲得pt"])
+        ]
+        month_sheet.append_row(values)
+
+    await message.channel.send(f"{month_str} のランキングを更新しました！")
 
 client.run(TOKEN)
