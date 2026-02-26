@@ -72,11 +72,17 @@ async def on_message(message):
 
             file_bytes = await attachment.read()
 
+            # =============================
+            # CSV読み込み（完全対応版）
+            # =============================
             try:
                 df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
-            except:
-                df = pd.read_csv(io.BytesIO(file_bytes), encoding="shift-jis")
-
+           except:
+           try:
+                df = pd.read_csv(io.BytesIO(file_bytes), encoding="cp932")
+           except:
+                df = pd.read_csv(io.BytesIO(file_bytes), encoding="shift-jis", errors="replace")
+ 
             # 必須列チェック
             required_columns = ["順位", "識別番号", "氏名"]
             for col in required_columns:
