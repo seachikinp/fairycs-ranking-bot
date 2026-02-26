@@ -2,3 +2,4 @@ discord.py
 pandas
 gspread
 google-auth
+flask
