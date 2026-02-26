@@ -57,7 +57,7 @@ def get_base_point(rank):
         return 3
 
 # =============================
-# CSV読み込み（UTF-8 / SJIS両対応）
+# CSV読み込み（UTF-8 / SJIS対応）
 # =============================
 def read_csv_safely(file_bytes):
     encodings = ["utf-8-sig", "utf-8", "cp932", "shift-jis"]
@@ -97,19 +97,24 @@ async def on_message(message):
                     await message.channel.send(f"エラー：'{col}' 列が見つかりません。")
                     return
 
-            # 日付抽出（全角半角対応）
-            match = re.search(r"[（(](\d{8})[）)]", attachment.filename)
+            # =============================
+            # 日付抽出（ファイル名内の8桁数字）
+            # =============================
+            match = re.search(r"\d{8}", attachment.filename)
+
             if not match:
-                await message.channel.send("ファイル名から日付を取得できませんでした。")
+                await message.channel.send(f"日付取得失敗: ファイル名 = {attachment.filename}")
                 return
 
-            date_str = match.group(1)
+            date_str = match.group(0)
             event_date = datetime.strptime(date_str, "%Y%m%d")
             month_str = event_date.strftime("%Y-%m")
             date_display = event_date.strftime("%Y-%m-%d")
 
+            # 参加人数
             participant_count = len(df)
 
+            # ポイント計算
             def calc_point(row):
                 rank = row["順位"]
                 base = get_base_point(rank)
@@ -122,13 +127,14 @@ async def on_message(message):
 
             spreadsheet = get_sheet()
 
-            # 大会ログ
+            # 大会ログ取得 or 作成
             try:
                 log_sheet = spreadsheet.worksheet("大会ログ")
             except:
                 log_sheet = spreadsheet.add_worksheet(title="大会ログ", rows=1000, cols=10)
                 log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
 
+            # ログ追記
             for _, row in df.iterrows():
                 log_sheet.append_row([
                     row["開催日"],
@@ -140,7 +146,9 @@ async def on_message(message):
                     row["獲得pt"]
                 ])
 
+            # =============================
             # 月別集計
+            # =============================
             records = log_sheet.get_all_records()
             log_df = pd.DataFrame(records)
             month_df = log_df[log_df["月"] == month_str]
@@ -157,6 +165,7 @@ async def on_message(message):
             grouped = grouped.sort_values(by="獲得pt", ascending=False)
             grouped["順位"] = range(1, len(grouped) + 1)
 
+            # 月シート取得 or 作成
             try:
                 month_sheet = spreadsheet.worksheet(month_str)
                 month_sheet.clear()
