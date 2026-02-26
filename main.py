@@ -39,7 +39,7 @@ def get_base_point(rank):
     try:
         rank = int(rank)
     except:
-        return 3  # ドロップ扱い
+        return 3
 
     if rank == 1:
         return 20
@@ -69,6 +69,14 @@ def read_csv_safely(file_bytes):
     raise Exception("CSVの文字コードを判定できませんでした。UTF-8またはSJISで保存してください。")
 
 # =============================
+# NaN安全変換
+# =============================
+def safe_value(v):
+    if pd.isna(v):
+        return ""
+    return v
+
+# =============================
 # CSV処理
 # =============================
 @client.event
@@ -81,7 +89,6 @@ async def on_message(message):
 
         if attachment.filename.endswith(".csv"):
 
-            # デバッグ用：受信ファイル名表示
             await message.channel.send(f"受信ファイル名: {attachment.filename}")
             await message.channel.send("CSVを受け取りました。集計します...")
 
@@ -94,6 +101,9 @@ async def on_message(message):
                 await message.channel.send(str(e))
                 return
 
+            # NaN完全除去
+            df = df.fillna("")
+
             # 必須列チェック
             required_columns = ["順位", "識別番号", "氏名"]
             for col in required_columns:
@@ -102,7 +112,7 @@ async def on_message(message):
                     return
 
             # =============================
-            # 日付抽出（ファイル名内の8桁数字）
+            # 日付抽出（8桁数字）
             # =============================
             match = re.search(r"\d{8}", attachment.filename)
 
@@ -121,13 +131,11 @@ async def on_message(message):
             month_str = event_date.strftime("%Y-%m")
             date_display = event_date.strftime("%Y-%m-%d")
 
-            # 参加人数
             participant_count = len(df)
 
             # ポイント計算
             def calc_point(row):
-                rank = row["順位"]
-                base = get_base_point(rank)
+                base = get_base_point(row["順位"])
                 return base * participant_count
 
             df["獲得pt"] = df.apply(calc_point, axis=1)
@@ -144,24 +152,31 @@ async def on_message(message):
                 log_sheet = spreadsheet.add_worksheet(title="大会ログ", rows=1000, cols=10)
                 log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
 
-            # ログ追記
+            # ログ追記（NaN完全対策）
             for _, row in df.iterrows():
-                log_sheet.append_row([
-                    row["開催日"],
-                    row["月"],
-                    row["識別番号"],
-                    row["氏名"],
-                    row["順位"],
-                    row["参加人数"],
-                    row["獲得pt"]
-                ])
+                values = [
+                    safe_value(row["開催日"]),
+                    safe_value(row["月"]),
+                    safe_value(row["識別番号"]),
+                    safe_value(row["氏名"]),
+                    safe_value(row["順位"]),
+                    safe_value(row["参加人数"]),
+                    safe_value(row["獲得pt"])
+                ]
+                log_sheet.append_row(values)
 
             # =============================
             # 月別集計
             # =============================
             records = log_sheet.get_all_records()
             log_df = pd.DataFrame(records)
+            log_df = log_df.fillna("")
+
             month_df = log_df[log_df["月"] == month_str]
+
+            if len(month_df) == 0:
+                await message.channel.send("対象データがありません。")
+                return
 
             grouped = (
                 month_df.groupby("識別番号")
@@ -185,12 +200,13 @@ async def on_message(message):
             month_sheet.append_row(["順位","識別番号","氏名","合計pt"])
 
             for _, row in grouped.iterrows():
-                month_sheet.append_row([
-                    row["順位"],
-                    row["識別番号"],
-                    row["氏名"],
-                    row["獲得pt"]
-                ])
+                values = [
+                    safe_value(row["順位"]),
+                    safe_value(row["識別番号"]),
+                    safe_value(row["氏名"]),
+                    safe_value(row["獲得pt"])
+                ]
+                month_sheet.append_row(values)
 
             await message.channel.send(f"{month_str} のランキングを更新しました！")
 
