@@ -77,10 +77,10 @@ async def on_message(message):
             # =============================
             try:
                 df = pd.read_csv(io.BytesIO(file_bytes), encoding="utf-8")
-           except:
-           try:
+            except:
+            try:
                 df = pd.read_csv(io.BytesIO(file_bytes), encoding="cp932")
-           except:
+            except:
                 df = pd.read_csv(io.BytesIO(file_bytes), encoding="shift-jis", errors="replace")
  
             # 必須列チェック
