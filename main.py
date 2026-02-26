@@ -8,9 +8,10 @@ from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 from flask import Flask
+import matplotlib.pyplot as plt
 
 # =========================
-# ダミーWebサーバー（Render無料対策）
+# Render無料対策（ダミーWebサーバー）
 # =========================
 app = Flask(__name__)
 
@@ -82,6 +83,52 @@ def clean_df(df):
     df = df.fillna("")
     df = df.replace([float("inf"), float("-inf")], "")
     return df
+
+# =========================
+# ランキング画像生成
+# =========================
+def generate_ranking_image(top15, month_str):
+    plt.rcParams["font.family"] = "DejaVu Sans"
+
+    fig_height = 0.6 * len(top15) + 2
+    fig, ax = plt.subplots(figsize=(10, fig_height))
+
+    ax.set_facecolor("#111111")
+    fig.patch.set_facecolor("#111111")
+    ax.axis("off")
+
+    ax.text(0.5, 1.05,
+            f"{month_str} マンスリーランキング TOP15",
+            fontsize=20,
+            color="white",
+            ha="center",
+            weight="bold")
+
+    for i, (_, row) in enumerate(top15.iterrows()):
+        rank = int(row["順位"])
+        name = row["氏名"]
+        pt = int(row["獲得pt"])
+
+        y = 1 - (i + 1) / (len(top15) + 1)
+
+        if rank == 1:
+            color = "#FFD700"
+        elif rank == 2:
+            color = "#C0C0C0"
+        elif rank == 3:
+            color = "#CD7F32"
+        else:
+            color = "white"
+
+        ax.text(0.05, y, f"{rank}位", fontsize=16, color=color, weight="bold")
+        ax.text(0.25, y, name, fontsize=16, color="white")
+        ax.text(0.90, y, f"{pt}pts", fontsize=16, color="white", ha="right")
+
+    file_path = "ranking.png"
+    plt.savefig(file_path, bbox_inches="tight", dpi=200)
+    plt.close()
+
+    return file_path
 
 # =========================
 # Discordイベント
@@ -165,41 +212,47 @@ async def on_message(message):
 
     header = [["順位","識別番号","氏名","合計pt"]]
     data = grouped[["順位","識別番号","氏名","獲得pt"]].values.tolist()
-
     month_sheet.update("A1", header + data)
-    
+
+    await message.channel.send(f"{month_str} のランキングを更新しました！")
+
     # =========================
-    # 上位15位をEmbed表示
+    # Embed表示
     # =========================
     top15 = grouped.head(15)
 
     embed = discord.Embed(
-        title=f"🏆 {month_str} マンスリーランキング TOP15",
-        color=0xFFD700
+        title=f"🏆 {month_str} ランキング TOP15",
+        color=discord.Color.gold()
     )
 
-    description_lines = []
-
+    lines = []
     for _, row in top15.iterrows():
-        rank = row["順位"]
+        rank = int(row["順位"])
         name = row["氏名"]
-        pt = row["獲得pt"]
+        pt = int(row["獲得pt"])
 
         if rank == 1:
-            line = f"🥇 **1位** {name} - {pt}pt"
+            line = f"👑 🥇 1位 {name} — {pt}pt"
         elif rank == 2:
-            line = f"🥈 **2位** {name} - {pt}pt"
+            line = f"🥈 2位 {name} — {pt}pt"
         elif rank == 3:
-            line = f"🥉 **3位** {name} - {pt}pt"
+            line = f"🥉 3位 {name} — {pt}pt"
         else:
-            line = f"{rank}位 {name} - {pt}pt"
+            line = f"{rank}位 {name} — {pt}pt"
 
-        description_lines.append(line)
+        lines.append(line)
 
-    embed.description = "\n".join(description_lines)
-
+    embed.description = "\n".join(lines)
     await message.channel.send(embed=embed)
-    await message.channel.send(f"{month_str} のランキングを更新しました！")
+
+    # =========================
+    # 画像生成＆送信
+    # =========================
+    image_path = generate_ranking_image(top15, month_str)
+    file = discord.File(image_path, filename="ranking.png")
+    await message.channel.send(file=file)
+    os.remove(image_path)
 
 # =========================
 # 起動
