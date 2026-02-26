@@ -80,7 +80,10 @@ async def on_message(message):
 
                 # CSV読み込み
                 file = await attachment.read()
-                df = pd.read_csv(io.BytesIO(file))
+                try:
+                df = pd.read_csv(io.BytesIO(file), encoding="utf-8")
+                except UnicodeDecodeError:
+                df = pd.read_csv(io.BytesIO(file), encoding="cp932")
 
                 participants = len(df)
 
