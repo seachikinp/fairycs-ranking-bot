@@ -1,0 +1,1 @@
+# fairycs-ranking-bot
