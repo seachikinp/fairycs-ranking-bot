@@ -174,7 +174,7 @@ async def on_message(message):
     top15 = grouped.head(15)
 
     embed = discord.Embed(
-        title=f"🏆 {month_str} ランキング TOP15",
+        title=f"🏆 {month_str} マンスリーランキング TOP15",
         color=0xFFD700
     )
 
