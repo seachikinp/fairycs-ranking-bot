@@ -8,6 +8,8 @@ from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 from flask import Flask
+import matplotlib
+matplotlib.use("Agg")  # Render環境用（超重要）
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
@@ -86,11 +88,15 @@ def clean_df(df):
     return df
 
 # =========================
-# ランキング画像生成（日本語フォント対応）
+# ランキング画像生成（TTF安定版）
 # =========================
 def generate_ranking_image(top15, month_str):
 
-    font_path = "NotoSansCJK-Regular.ttc"
+    font_path = "NotoSansJP-Regular.ttf"
+
+    if not os.path.exists(font_path):
+        raise Exception("NotoSansJP-Regular.ttf が見つかりません")
+
     font_prop = font_manager.FontProperties(fname=font_path)
 
     fig_height = 0.6 * len(top15) + 2
@@ -126,28 +132,17 @@ def generate_ranking_image(top15, month_str):
         else:
             color = "white"
 
-        ax.text(
-            0.05, y, f"{rank}位",
-            fontsize=16,
-            color=color,
-            weight="bold",
-            fontproperties=font_prop
-        )
+        ax.text(0.05, y, f"{rank}位",
+                fontsize=16, color=color, weight="bold",
+                fontproperties=font_prop)
 
-        ax.text(
-            0.25, y, name,
-            fontsize=16,
-            color="white",
-            fontproperties=font_prop
-        )
+        ax.text(0.25, y, name,
+                fontsize=16, color="white",
+                fontproperties=font_prop)
 
-        ax.text(
-            0.90, y, f"{pt}pts",
-            fontsize=16,
-            color="white",
-            ha="right",
-            fontproperties=font_prop
-        )
+        ax.text(0.90, y, f"{pt}pts",
+                fontsize=16, color="white", ha="right",
+                fontproperties=font_prop)
 
     file_path = "ranking.png"
     plt.savefig(file_path, bbox_inches="tight", dpi=200)
@@ -200,7 +195,7 @@ async def on_message(message):
 
     spreadsheet = get_sheet()
 
-    # ===== 大会ログ =====
+    # 大会ログ
     try:
         log_sheet = spreadsheet.worksheet("大会ログ")
     except:
@@ -210,7 +205,7 @@ async def on_message(message):
     log_values = df[["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"]].values.tolist()
     log_sheet.append_rows(log_values)
 
-    # ===== 月別集計 =====
+    # 月別集計
     records = log_sheet.get_all_records()
     log_df = pd.DataFrame(records)
     month_df = log_df[log_df["月"] == month_str]
@@ -232,11 +227,13 @@ async def on_message(message):
 
     header = [["順位","識別番号","氏名","合計pt"]]
     data = grouped[["順位","識別番号","氏名","獲得pt"]].values.tolist()
-    month_sheet.update("A1", header + data)
+
+    # ✅ DeprecationWarning修正
+    month_sheet.update(range_name="A1", values=header + data)
 
     await message.channel.send(f"{month_str} のランキングを更新しました！")
 
-    # ===== Embed表示 =====
+    # Embed表示
     top15 = grouped.head(15)
 
     embed = discord.Embed(
@@ -246,31 +243,15 @@ async def on_message(message):
 
     lines = []
     for _, row in top15.iterrows():
-        rank = int(row["順位"])
-        name = row["氏名"]
-        pt = int(row["獲得pt"])
-
-        if rank == 1:
-            line = f"👑 🥇 1位 {name} — {pt}pt"
-        elif rank == 2:
-            line = f"🥈 2位 {name} — {pt}pt"
-        elif rank == 3:
-            line = f"🥉 3位 {name} — {pt}pt"
-        else:
-            line = f"{rank}位 {name} — {pt}pt"
-
-        lines.append(line)
+        lines.append(f"{int(row['順位'])}位 {row['氏名']} — {int(row['獲得pt'])}pt")
 
     embed.description = "\n".join(lines)
     await message.channel.send(embed=embed)
 
-    # ===== 画像送信 =====
+    # 画像送信
     image_path = generate_ranking_image(top15, month_str)
     file = discord.File(image_path, filename="ranking.png")
     await message.channel.send(file=file)
     os.remove(image_path)
 
-# =========================
-# 起動
-# =========================
 client.run(TOKEN)
