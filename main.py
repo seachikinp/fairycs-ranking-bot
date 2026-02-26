@@ -3,10 +3,30 @@ import pandas as pd
 import io
 import os
 import re
+import threading
 from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
+from flask import Flask
 
+# =========================
+# ダミーWebサーバー（Render無料対策）
+# =========================
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running"
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_web).start()
+
+# =========================
+# Discord設定
+# =========================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.default()
@@ -20,12 +40,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
+# =========================
+# Google Sheets接続
+# =========================
 def get_sheet():
     creds_dict = eval(os.getenv("GOOGLE_CREDENTIALS"))
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     gc = gspread.authorize(creds)
     return gc.open(SPREADSHEET_NAME)
 
+# =========================
+# ポイント計算
+# =========================
 def get_base_point(rank):
     try:
         rank = int(rank)
@@ -40,6 +66,9 @@ def get_base_point(rank):
     if 17 <= rank <= 32: return 4
     return 3
 
+# =========================
+# CSV安全読み込み
+# =========================
 def read_csv_safely(file_bytes):
     encodings = ["utf-8-sig", "utf-8", "cp932", "shift-jis"]
     for enc in encodings:
@@ -54,6 +83,9 @@ def clean_df(df):
     df = df.replace([float("inf"), float("-inf")], "")
     return df
 
+# =========================
+# Discordイベント
+# =========================
 @client.event
 async def on_message(message):
     if message.author.bot:
@@ -80,7 +112,7 @@ async def on_message(message):
 
     match = re.search(r"\d{8}", attachment.filename)
     if not match:
-        await message.channel.send("日付取得失敗")
+        await message.channel.send("ファイル名に日付（YYYYMMDD）が見つかりません。")
         return
 
     event_date = datetime.strptime(match.group(0), "%Y%m%d")
@@ -96,7 +128,9 @@ async def on_message(message):
 
     spreadsheet = get_sheet()
 
-    # ===== 大会ログ =====
+    # =========================
+    # 大会ログ
+    # =========================
     try:
         log_sheet = spreadsheet.worksheet("大会ログ")
     except:
@@ -104,9 +138,11 @@ async def on_message(message):
         log_sheet.append_row(["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"])
 
     log_values = df[["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"]].values.tolist()
-    log_sheet.append_rows(log_values)   # ★一括書き込み
+    log_sheet.append_rows(log_values)
 
-    # ===== 月別集計 =====
+    # =========================
+    # 月別集計
+    # =========================
     records = log_sheet.get_all_records()
     log_df = pd.DataFrame(records)
 
@@ -119,7 +155,7 @@ async def on_message(message):
     )
 
     grouped = grouped.sort_values(by="獲得pt", ascending=False)
-    grouped["順位"] = range(1, len(grouped)+1)
+    grouped["順位"] = range(1, len(grouped) + 1)
 
     try:
         month_sheet = spreadsheet.worksheet(month_str)
@@ -130,8 +166,11 @@ async def on_message(message):
     header = [["順位","識別番号","氏名","合計pt"]]
     data = grouped[["順位","識別番号","氏名","獲得pt"]].values.tolist()
 
-    month_sheet.update("A1", header + data)   # ★一括更新
+    month_sheet.update("A1", header + data)
 
     await message.channel.send(f"{month_str} のランキングを更新しました！")
 
+# =========================
+# 起動
+# =========================
 client.run(TOKEN)
