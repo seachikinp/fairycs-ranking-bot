@@ -9,6 +9,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from flask import Flask
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 
 # =========================
 # Render無料対策（ダミーWebサーバー）
@@ -85,10 +86,12 @@ def clean_df(df):
     return df
 
 # =========================
-# ランキング画像生成
+# ランキング画像生成（日本語フォント対応）
 # =========================
 def generate_ranking_image(top15, month_str):
-    plt.rcParams["font.family"] = "DejaVu Sans"
+
+    font_path = "NotoSansCJK-Regular.ttc"
+    font_prop = font_manager.FontProperties(fname=font_path)
 
     fig_height = 0.6 * len(top15) + 2
     fig, ax = plt.subplots(figsize=(10, fig_height))
@@ -97,16 +100,19 @@ def generate_ranking_image(top15, month_str):
     fig.patch.set_facecolor("#111111")
     ax.axis("off")
 
-    ax.text(0.5, 1.05,
-            f"{month_str} マンスリーランキング TOP15",
-            fontsize=20,
-            color="white",
-            ha="center",
-            weight="bold")
+    ax.text(
+        0.5, 1.05,
+        f"{month_str} マンスリーランキング TOP15",
+        fontsize=20,
+        color="white",
+        ha="center",
+        weight="bold",
+        fontproperties=font_prop
+    )
 
     for i, (_, row) in enumerate(top15.iterrows()):
         rank = int(row["順位"])
-        name = row["氏名"]
+        name = str(row["氏名"])
         pt = int(row["獲得pt"])
 
         y = 1 - (i + 1) / (len(top15) + 1)
@@ -120,9 +126,28 @@ def generate_ranking_image(top15, month_str):
         else:
             color = "white"
 
-        ax.text(0.05, y, f"{rank}位", fontsize=16, color=color, weight="bold")
-        ax.text(0.25, y, name, fontsize=16, color="white")
-        ax.text(0.90, y, f"{pt}pts", fontsize=16, color="white", ha="right")
+        ax.text(
+            0.05, y, f"{rank}位",
+            fontsize=16,
+            color=color,
+            weight="bold",
+            fontproperties=font_prop
+        )
+
+        ax.text(
+            0.25, y, name,
+            fontsize=16,
+            color="white",
+            fontproperties=font_prop
+        )
+
+        ax.text(
+            0.90, y, f"{pt}pts",
+            fontsize=16,
+            color="white",
+            ha="right",
+            fontproperties=font_prop
+        )
 
     file_path = "ranking.png"
     plt.savefig(file_path, bbox_inches="tight", dpi=200)
@@ -175,9 +200,7 @@ async def on_message(message):
 
     spreadsheet = get_sheet()
 
-    # =========================
-    # 大会ログ
-    # =========================
+    # ===== 大会ログ =====
     try:
         log_sheet = spreadsheet.worksheet("大会ログ")
     except:
@@ -187,12 +210,9 @@ async def on_message(message):
     log_values = df[["開催日","月","識別番号","氏名","順位","参加人数","獲得pt"]].values.tolist()
     log_sheet.append_rows(log_values)
 
-    # =========================
-    # 月別集計
-    # =========================
+    # ===== 月別集計 =====
     records = log_sheet.get_all_records()
     log_df = pd.DataFrame(records)
-
     month_df = log_df[log_df["月"] == month_str]
 
     grouped = (
@@ -216,9 +236,7 @@ async def on_message(message):
 
     await message.channel.send(f"{month_str} のランキングを更新しました！")
 
-    # =========================
-    # Embed表示
-    # =========================
+    # ===== Embed表示 =====
     top15 = grouped.head(15)
 
     embed = discord.Embed(
@@ -246,9 +264,7 @@ async def on_message(message):
     embed.description = "\n".join(lines)
     await message.channel.send(embed=embed)
 
-    # =========================
-    # 画像生成＆送信
-    # =========================
+    # ===== 画像送信 =====
     image_path = generate_ranking_image(top15, month_str)
     file = discord.File(image_path, filename="ranking.png")
     await message.channel.send(file=file)
